@@ -1,0 +1,28 @@
+services:
+  songzuo:
+    image: songzuo:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: songzuo
+    restart: unless-stopped
+    env_file:
+      - stack.env
+    ports:
+      - "8787:8000"
+    volumes:
+      - songzuo-data:/app/data
+      - songzuo-models:/app/models:ro
+    mem_limit: 512m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+
+volumes:
+  songzuo-data:
+    name: songzuo-data
+  songzuo-models:
+    name: songzuo-models

@@ -1,0 +1,18 @@
+services:
+  songzuo:
+    build: .
+    container_name: songzuo
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8787:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models:ro
+    mem_limit: 512m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid

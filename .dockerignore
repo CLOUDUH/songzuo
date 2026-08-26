@@ -1,0 +1,11 @@
+.git
+.env
+node_modules
+dist
+data
+models/*.onnx
+__pycache__
+.pytest_cache
+.DS_Store
+work
+outputs
