@@ -32,7 +32,7 @@ const demo:Overview = {
   ],
   series:[{label:"一",seconds:19080,sedentary_count:2},{label:"二",seconds:17160,sedentary_count:1},{label:"三",seconds:21120,sedentary_count:2},{label:"四",seconds:15780,sedentary_count:1},{label:"五",seconds:9960,sedentary_count:0},{label:"六",seconds:3480,sedentary_count:0},{label:"日",seconds:0,sedentary_count:0}],
 };
-const defaultSettings:Settings = {sedentary_minutes:60,leave_grace_seconds:180,sample_interval_seconds:3,daily_report_enabled:true,daily_report_time:"20:30",weekly_report_enabled:true,weekly_report_day:7,weekly_report_time:"20:35",bark_enabled:false,webhook_enabled:false,camera_offline_alert_enabled:true,camera_offline_minutes:3,camera_recovery_alert_enabled:true,reminder_title:"该起身活动啦",reminder_body:"你已经连续坐了 {duration}，走动几分钟吧。",roi_x:0.15,roi_y:0.15,roi_w:0.7,roi_h:0.8};
+const defaultSettings:Settings = {sedentary_minutes:60,leave_grace_seconds:180,sample_interval_seconds:3,daily_report_enabled:true,daily_report_time:"20:30",weekly_report_enabled:true,weekly_report_day:7,weekly_report_time:"20:35",bark_enabled:false,webhook_enabled:false,camera_offline_alert_enabled:true,camera_offline_minutes:3,camera_recovery_alert_enabled:true,reminder_title:"该起身活动啦",reminder_body:"你已经连续坐了 {duration}，走动几分钟吧。",roi_x:0.13,roi_y:0.54,roi_w:0.37,roi_h:0.43};
 const defaultCamera:CameraSettings = {stream_url:"http://192.168.1.80:2345/",username:"",auth_type:"basic",verify_tls:true,password_configured:false,cookie_configured:false,online:false,error:"等待连接"};
 
 const api = async <T,>(path:string, init?:RequestInit):Promise<T> => {

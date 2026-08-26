@@ -24,6 +24,59 @@ def _roi_intersects(box: tuple[int, int, int, int], shape: tuple[int, ...], roi:
     return rx <= center_x <= rx + rw and ry <= center_y <= ry + rh
 
 
+def _roi_bounds(shape: tuple[int, ...], roi: dict[str, float]) -> tuple[int, int, int, int]:
+    height, width = shape[:2]
+    x0 = max(0, min(width - 1, int(roi["roi_x"] * width)))
+    y0 = max(0, min(height - 1, int(roi["roi_y"] * height)))
+    x1 = max(x0 + 1, min(width, int((roi["roi_x"] + roi["roi_w"]) * width)))
+    y1 = max(y0 + 1, min(height, int((roi["roi_y"] + roi["roi_h"]) * height)))
+    return x0, y0, x1, y1
+
+
+class FacePersonDetector:
+    """在座位 ROI 内检测正脸和左右侧脸，适合上半身被桌面遮挡的固定工位。"""
+
+    name = "face"
+
+    def __init__(self, input_width: int = 360):
+        self.input_width = input_width
+        self.frontal = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml")
+        self.profile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+        if self.frontal.empty() or self.profile.empty():
+            raise RuntimeError("OpenCV face cascades are unavailable")
+
+    def detect(self, frame: np.ndarray[Any, Any], roi: dict[str, float]) -> Detection:
+        x0, y0, x1, y1 = _roi_bounds(frame.shape, roi)
+        crop = frame[y0:y1, x0:x1]
+        if crop.size == 0:
+            return Detection(False, 0.0)
+        scale = min(1.0, self.input_width / max(crop.shape[1], 1))
+        resized = cv2.resize(crop, (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale)))) if scale < 1 else crop
+        gray = cv2.equalizeHist(cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY))
+        min_face = max(24, int(min(gray.shape[:2]) * 0.07))
+        max_face = max(min_face + 1, int(min(gray.shape[:2]) * 0.62))
+        found: list[tuple[int, int, int, int]] = []
+
+        frontal = self.frontal.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(min_face, min_face), maxSize=(max_face, max_face))
+        profile_left = self.profile.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=3, minSize=(min_face, min_face), maxSize=(max_face, max_face))
+        flipped = cv2.flip(gray, 1)
+        profile_right = self.profile.detectMultiScale(flipped, scaleFactor=1.08, minNeighbors=3, minSize=(min_face, min_face), maxSize=(max_face, max_face))
+
+        for boxes, mirrored in ((frontal, False), (profile_left, False), (profile_right, True)):
+            for x, y, width, height in boxes:
+                if mirrored:
+                    x = gray.shape[1] - (x + width)
+                box = (
+                    int(x0 + x / scale),
+                    int(y0 + y / scale),
+                    int(width / scale),
+                    int(height / scale),
+                )
+                if _roi_intersects(box, frame.shape, roi):
+                    found.append(box)
+        return Detection(bool(found), 0.78 if found else 0.0, tuple(found))
+
+
 class HogPersonDetector:
     """零模型文件的保底方案；适合先验证流程，坐姿准确率低于 YOLO。"""
 
@@ -47,6 +100,20 @@ class HogPersonDetector:
                 restored.append(box)
                 confidences.append(float(min(1.0, max(0.0, weight))))
         return Detection(bool(restored), max(confidences, default=0.0), tuple(restored))
+
+
+class HybridPersonDetector:
+    """优先使用低成本脸部检测，未发现时再以 HOG 全身检测补偿。"""
+
+    name = "hybrid"
+
+    def __init__(self, input_size: int = 320):
+        self.face = FacePersonDetector(input_width=max(360, input_size))
+        self.hog = HogPersonDetector(input_size)
+
+    def detect(self, frame: np.ndarray[Any, Any], roi: dict[str, float]) -> Detection:
+        face_result = self.face.detect(frame, roi)
+        return face_result if face_result.present else self.hog.detect(frame, roi)
 
 
 class YoloPersonDetector:
@@ -95,9 +162,11 @@ class YoloPersonDetector:
         return Detection(bool(accepted), max(accepted_scores, default=0.0), tuple(accepted))
 
 
-def create_detector(mode: str, model_path: Path, input_size: int) -> HogPersonDetector | YoloPersonDetector:
+def create_detector(mode: str, model_path: Path, input_size: int) -> HybridPersonDetector | HogPersonDetector | YoloPersonDetector:
     if mode in {"auto", "yolo"} and model_path.is_file():
         return YoloPersonDetector(model_path, input_size)
     if mode == "yolo":
         raise FileNotFoundError(f"未找到 ONNX 模型：{model_path}")
-    return HogPersonDetector(input_size)
+    if mode == "hog":
+        return HogPersonDetector(input_size)
+    return HybridPersonDetector(input_size)

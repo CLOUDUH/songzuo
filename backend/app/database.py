@@ -23,10 +23,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "camera_recovery_alert_enabled": 1,
     "reminder_title": "该起身活动啦",
     "reminder_body": "你已经连续坐了 {duration}，走动几分钟吧。",
-    "roi_x": 0.15,
-    "roi_y": 0.15,
-    "roi_w": 0.70,
-    "roi_h": 0.80,
+    "roi_x": 0.13,
+    "roi_y": 0.54,
+    "roi_w": 0.37,
+    "roi_h": 0.43,
 }
 
 
@@ -92,6 +92,10 @@ class Database:
                     detail TEXT NOT NULL DEFAULT '',
                     UNIQUE(kind, period_key)
                 );
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
                 CREATE INDEX IF NOT EXISTS idx_sessions_ended_at ON sessions(ended_at);
                 CREATE INDEX IF NOT EXISTS idx_notification_log_sent_at ON notification_log(sent_at);
@@ -114,6 +118,15 @@ class Database:
                 f"INSERT OR IGNORE INTO settings ({columns}) VALUES ({placeholders})",
                 [1, *values.values()],
             )
+            roi_migration = db.execute("SELECT value FROM app_meta WHERE key = 'seat_roi_v2'").fetchone()
+            if roi_migration is None:
+                db.execute(
+                    """UPDATE settings SET roi_x = 0.13, roi_y = 0.54, roi_w = 0.37, roi_h = 0.43, updated_at = ?
+                       WHERE ABS(roi_x - 0.15) < 0.0001 AND ABS(roi_y - 0.15) < 0.0001
+                         AND ABS(roi_w - 0.70) < 0.0001 AND ABS(roi_h - 0.80) < 0.0001""",
+                    (datetime.now().astimezone().isoformat(),),
+                )
+                db.execute("INSERT INTO app_meta(key, value) VALUES ('seat_roi_v2', 'camera-2026-08-26')")
             db.execute("PRAGMA optimize")
 
     def settings(self) -> dict[str, Any]:

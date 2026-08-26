@@ -9,7 +9,7 @@ import numpy as np
 
 from .camera import MjpegReader
 from .database import Database
-from .detector import Detection, HogPersonDetector, YoloPersonDetector
+from .detector import Detection, HogPersonDetector, HybridPersonDetector, YoloPersonDetector
 from .notifications import Notifier
 from .stats import format_duration, parse_datetime
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class Monitor:
-    def __init__(self, db: Database, camera: MjpegReader, detector: HogPersonDetector | YoloPersonDetector, notifier: Notifier):
+    def __init__(self, db: Database, camera: MjpegReader, detector: HybridPersonDetector | HogPersonDetector | YoloPersonDetector, notifier: Notifier):
         self.db, self.camera, self.detector, self.notifier = db, camera, detector, notifier
         active = db.active_session()
         self.session_id: int | None = int(active["id"]) if active else None

@@ -33,4 +33,16 @@ def test_settings_are_persisted_and_secrets_are_not_fields(tmp_path: Path) -> No
     assert settings["sedentary_minutes"] == 75
     assert settings["camera_offline_alert_enabled"] is True
     assert settings["camera_offline_minutes"] == 3
+    assert (settings["roi_x"], settings["roi_y"], settings["roi_w"], settings["roi_h"]) == (0.13, 0.54, 0.37, 0.43)
     assert "camera_password" not in settings
+
+
+def test_old_default_roi_is_migrated_once(tmp_path: Path) -> None:
+    db = Database(tmp_path / "test.db")
+    db.initialize()
+    with db.connect() as connection:
+        connection.execute("UPDATE settings SET roi_x = 0.15, roi_y = 0.15, roi_w = 0.70, roi_h = 0.80 WHERE id = 1")
+        connection.execute("DELETE FROM app_meta WHERE key = 'seat_roi_v2'")
+    db.initialize()
+    settings = db.settings()
+    assert (settings["roi_x"], settings["roi_y"], settings["roi_w"], settings["roi_h"]) == (0.13, 0.54, 0.37, 0.43)
