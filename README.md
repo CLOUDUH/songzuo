@@ -60,7 +60,7 @@ docker compose logs -f --tail=100
 
 ### 使用 Portainer
 
-Docker Standalone 环境可在 Portainer 中选择 `Stacks → Add stack → Git repository`，仓库指向本项目所在仓库，Compose path 填 `working-camera/portainer-stack.yml`。该文件使用 Portainer 生成的 `stack.env` 接收界面中填写的环境变量，并用命名卷 `songzuo-data`、`songzuo-models` 保留数据。
+Docker Standalone 环境可在 Portainer 中选择 `Stacks → Add stack → Git repository`，仓库指向 `https://github.com/CLOUDUH/songzuo.git`，Repository reference 填 `refs/heads/main`，Compose path 填 `portainer-stack.yml`。该文件通过 Compose 的 `${变量名}` 直接接收 Portainer 页面中填写的环境变量，无需在 Git 仓库中保存 `stack.env`，并用命名卷 `songzuo-data`、`songzuo-models` 保留数据。
 
 至少设置 `TZ=Asia/Shanghai`；需要 Bark 时再设置 `BARK_SERVER` 和 `BARK_DEVICE_KEY`。摄像头地址与账号密码可以部署完成后直接在 Web 页面设置。
 
