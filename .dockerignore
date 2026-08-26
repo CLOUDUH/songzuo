@@ -1,7 +1,6 @@
 .git
 .env
 node_modules
-dist
 data
 models/*.onnx
 __pycache__
