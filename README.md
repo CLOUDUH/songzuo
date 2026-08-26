@@ -66,6 +66,8 @@ Docker Standalone 环境可在 Portainer 中选择 `Stacks → Add stack → Git
 
 Portainer 对 Git Stack 内 `build:` 的支持取决于版本和环境连接方式。如果部署日志显示构建步骤失败，应先在 CI 或 Docker 主机上构建并推送镜像，再把 `portainer-stack.yml` 中的 `image` 改为实际镜像地址并删除 `build` 段。
 
+如果 Portainer 无法稳定连接 GitHub Git 服务，仓库内的 `.github/workflows/container-image.yml` 会在每次推送 `main` 后将镜像发布到 `ghcr.io/clouduh/songzuo:latest`。等待 GitHub Actions 构建成功并将 GHCR Package 设为 Public 后，可在 Portainer 选择 `Stacks → Add stack → Web editor`，粘贴 `portainer-image-stack.yml` 的内容部署。该方式只拉取镜像，不需要 Portainer 克隆 Git 仓库或执行构建。
+
 ## 人物模型
 
 强烈建议正式使用前准备 YOLOv8n ONNX；HOG 不需要模型，但对只露出上半身的坐姿人物准确率有限。
