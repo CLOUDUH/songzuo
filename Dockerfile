@@ -6,7 +6,6 @@ RUN pnpm install --frozen-lockfile
 COPY index.html tsconfig.json vite.config.ts ./
 COPY app ./app
 COPY src ./src
-COPY public ./public
 RUN pnpm run build
 
 FROM python:3.12-slim AS runtime
