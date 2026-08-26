@@ -1,7 +1,7 @@
 FROM node:22-alpine AS web
 WORKDIR /web
-RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
 RUN pnpm install --frozen-lockfile
 COPY index.html tsconfig.json vite.config.ts ./
 COPY app ./app
