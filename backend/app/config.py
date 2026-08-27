@@ -16,6 +16,7 @@ def _int(name: str, default: int) -> int:
 class Config:
     database_path: Path = Path(os.getenv("DATABASE_PATH", "/app/data/songzuo.db"))
     camera_settings_path: Path = Path(os.getenv("CAMERA_SETTINGS_PATH", "/app/data/camera-settings.json"))
+    notification_settings_path: Path = Path(os.getenv("NOTIFICATION_SETTINGS_PATH", "/app/data/notification-settings.json"))
     static_dir: Path = Path(os.getenv("STATIC_DIR", "/app/static"))
     camera_stream_url: str = os.getenv("CAMERA_STREAM_URL", "http://192.168.1.80:2345/")
     camera_username: str = os.getenv("CAMERA_USERNAME", "")

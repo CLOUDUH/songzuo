@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 class SettingsUpdate(BaseModel):
     sedentary_minutes: int = Field(ge=15, le=360)
     leave_grace_seconds: int = Field(ge=10, le=900)
+    leave_confirm_seconds: int = Field(ge=3, le=120)
+    merge_gap_seconds: int = Field(ge=15, le=1800)
     sample_interval_seconds: int = Field(ge=1, le=30)
     daily_report_enabled: bool
     daily_report_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -28,6 +30,8 @@ class SettingsUpdate(BaseModel):
     def validate_roi(self) -> "SettingsUpdate":
         if self.roi_x + self.roi_w > 1 or self.roi_y + self.roi_h > 1:
             raise ValueError("座位区域必须完全位于画面内")
+        if self.merge_gap_seconds < self.leave_confirm_seconds:
+            raise ValueError("连续会话合并时间不能短于离座确认时间")
         return self
 
 
@@ -38,3 +42,9 @@ class CameraSettingsUpdate(BaseModel):
     auth_type: str = Field(pattern=r"^(none|basic|digest)$")
     cookie: str | None = Field(default=None, max_length=4000)
     verify_tls: bool = True
+
+
+class NotificationSettingsUpdate(BaseModel):
+    bark_server: HttpUrl
+    bark_device_key: str | None = Field(default=None, max_length=500)
+    generic_webhook_url: str | None = Field(default=None, max_length=2000)

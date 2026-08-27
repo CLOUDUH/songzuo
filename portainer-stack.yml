@@ -9,15 +9,8 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      BARK_SERVER: ${BARK_SERVER:-https://api.day.app}
-      BARK_DEVICE_KEY: ${BARK_DEVICE_KEY:-}
-      GENERIC_WEBHOOK_URL: ${GENERIC_WEBHOOK_URL:-}
-      CAMERA_STREAM_URL: ${CAMERA_STREAM_URL:-http://192.168.1.80:2345/}
-      CAMERA_USERNAME: ${CAMERA_USERNAME:-}
-      CAMERA_PASSWORD: ${CAMERA_PASSWORD:-}
-      CAMERA_AUTH_TYPE: ${CAMERA_AUTH_TYPE:-basic}
-      CAMERA_VERIFY_TLS: ${CAMERA_VERIFY_TLS:-true}
       CAMERA_SETTINGS_PATH: /app/data/camera-settings.json
+      NOTIFICATION_SETTINGS_PATH: /app/data/notification-settings.json
       DETECTOR_MODE: ${DETECTOR_MODE:-auto}
       DETECTOR_INPUT_SIZE: ${DETECTOR_INPUT_SIZE:-320}
       OPENCV_THREADS: ${OPENCV_THREADS:-2}

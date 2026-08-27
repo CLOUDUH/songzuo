@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from app.database import Database  # noqa: E402
-from app.stats import summarize  # noqa: E402
+from app.stats import same_time_comparison, summarize  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
 
 
 def test_session_lifecycle_and_cross_boundary_summary(tmp_path: Path) -> None:
@@ -46,3 +47,21 @@ def test_old_default_roi_is_migrated_once(tmp_path: Path) -> None:
     db.initialize()
     settings = db.settings()
     assert (settings["roi_x"], settings["roi_y"], settings["roi_w"], settings["roi_h"]) == (0.13, 0.54, 0.37, 0.43)
+
+
+def test_same_time_comparison_uses_historical_days_at_same_clock_time(tmp_path: Path) -> None:
+    db = Database(tmp_path / "test.db")
+    db.initialize()
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime(2026, 8, 27, 2, 0, tzinfo=timezone.utc)  # 当地 10:00
+    for days_ago, minutes in ((1, 60), (2, 120)):
+        start = datetime(2026, 8, 27 - days_ago, 0, 0, tzinfo=timezone.utc)
+        session_id = db.start_session(start)
+        db.end_session(session_id, start + timedelta(minutes=minutes), minutes >= 60)
+    today_start = datetime(2026, 8, 27, 1, 0, tzinfo=timezone.utc)
+    session_id = db.start_session(today_start)
+    db.end_session(session_id, today_start + timedelta(minutes=30), False)
+    result = same_time_comparison(db, now, tz)
+    assert result["today_seconds"] == 30 * 60
+    assert result["week_average_seconds"] > 0
+    assert result["week_change_percent"] < 0

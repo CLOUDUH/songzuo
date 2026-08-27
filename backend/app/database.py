@@ -10,6 +10,8 @@ from typing import Any, Iterator
 DEFAULT_SETTINGS: dict[str, Any] = {
     "sedentary_minutes": 60,
     "leave_grace_seconds": 180,
+    "leave_confirm_seconds": 9,
+    "merge_gap_seconds": 120,
     "sample_interval_seconds": 3,
     "daily_report_enabled": 1,
     "daily_report_time": "20:30",
@@ -57,6 +59,8 @@ class Database:
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     sedentary_minutes INTEGER NOT NULL CHECK (sedentary_minutes BETWEEN 15 AND 360),
                     leave_grace_seconds INTEGER NOT NULL CHECK (leave_grace_seconds BETWEEN 10 AND 900),
+                    leave_confirm_seconds INTEGER NOT NULL CHECK (leave_confirm_seconds BETWEEN 3 AND 120),
+                    merge_gap_seconds INTEGER NOT NULL CHECK (merge_gap_seconds BETWEEN 15 AND 1800),
                     sample_interval_seconds INTEGER NOT NULL CHECK (sample_interval_seconds BETWEEN 1 AND 30),
                     daily_report_enabled INTEGER NOT NULL CHECK (daily_report_enabled IN (0, 1)),
                     daily_report_time TEXT NOT NULL,
@@ -81,7 +85,15 @@ class Database:
                     is_sedentary INTEGER NOT NULL DEFAULT 0 CHECK (is_sedentary IN (0, 1)),
                     reminder_sent_at TEXT,
                     average_confidence REAL NOT NULL DEFAULT 0,
-                    samples INTEGER NOT NULL DEFAULT 0
+                    samples INTEGER NOT NULL DEFAULT 0,
+                    away_seconds INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS session_breaks (
+                    id INTEGER PRIMARY KEY,
+                    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT NOT NULL,
+                    duration_seconds INTEGER NOT NULL CHECK (duration_seconds >= 0)
                 );
                 CREATE TABLE IF NOT EXISTS notification_log (
                     id INTEGER PRIMARY KEY,
@@ -98,6 +110,7 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
                 CREATE INDEX IF NOT EXISTS idx_sessions_ended_at ON sessions(ended_at);
+                CREATE INDEX IF NOT EXISTS idx_session_breaks_session_id ON session_breaks(session_id);
                 CREATE INDEX IF NOT EXISTS idx_notification_log_sent_at ON notification_log(sent_at);
                 """
             )
@@ -107,10 +120,15 @@ class Database:
                 "camera_offline_alert_enabled": "ALTER TABLE settings ADD COLUMN camera_offline_alert_enabled INTEGER NOT NULL DEFAULT 1 CHECK (camera_offline_alert_enabled IN (0, 1))",
                 "camera_offline_minutes": "ALTER TABLE settings ADD COLUMN camera_offline_minutes INTEGER NOT NULL DEFAULT 3 CHECK (camera_offline_minutes BETWEEN 1 AND 120)",
                 "camera_recovery_alert_enabled": "ALTER TABLE settings ADD COLUMN camera_recovery_alert_enabled INTEGER NOT NULL DEFAULT 1 CHECK (camera_recovery_alert_enabled IN (0, 1))",
+                "leave_confirm_seconds": "ALTER TABLE settings ADD COLUMN leave_confirm_seconds INTEGER NOT NULL DEFAULT 9 CHECK (leave_confirm_seconds BETWEEN 3 AND 120)",
+                "merge_gap_seconds": "ALTER TABLE settings ADD COLUMN merge_gap_seconds INTEGER NOT NULL DEFAULT 120 CHECK (merge_gap_seconds BETWEEN 15 AND 1800)",
             }
             for column, statement in migrations.items():
                 if column not in existing_columns:
                     db.execute(statement)
+            session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+            if "away_seconds" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN away_seconds INTEGER NOT NULL DEFAULT 0")
             values = {**DEFAULT_SETTINGS, "updated_at": datetime.now().astimezone().isoformat()}
             columns = ",".join(["id", *values.keys()])
             placeholders = ",".join(["?"] * (len(values) + 1))
@@ -170,7 +188,7 @@ class Database:
     def update_active(self, session_id: int, now: datetime, confidence: float, sedentary: bool) -> None:
         with self.connect() as db:
             db.execute(
-                """UPDATE sessions SET duration_seconds = MAX(0, CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER)),
+                """UPDATE sessions SET duration_seconds = MAX(0, CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER) - away_seconds),
                    is_sedentary = MAX(is_sedentary, ?), average_confidence = ((average_confidence * samples) + ?) / (samples + 1), samples = samples + 1
                    WHERE id = ? AND ended_at IS NULL""",
                 (now.isoformat(), int(sedentary), confidence, session_id),
@@ -179,10 +197,22 @@ class Database:
     def end_session(self, session_id: int, ended_at: datetime, sedentary: bool) -> None:
         with self.connect() as db:
             db.execute(
-                """UPDATE sessions SET ended_at = ?, duration_seconds = MAX(0, CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER)),
+                """UPDATE sessions SET ended_at = ?, duration_seconds = MAX(0, CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER) - away_seconds),
                    is_sedentary = MAX(is_sedentary, ?) WHERE id = ? AND ended_at IS NULL""",
                 (ended_at.isoformat(), ended_at.isoformat(), int(sedentary), session_id),
             )
+
+    def add_break(self, session_id: int, started_at: datetime, ended_at: datetime) -> int:
+        seconds = max(0, int((ended_at - started_at).total_seconds()))
+        if seconds <= 0:
+            return 0
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO session_breaks(session_id, started_at, ended_at, duration_seconds) VALUES (?, ?, ?, ?)",
+                (session_id, started_at.isoformat(), ended_at.isoformat(), seconds),
+            )
+            db.execute("UPDATE sessions SET away_seconds = away_seconds + ? WHERE id = ?", (seconds, session_id))
+        return seconds
 
     def mark_reminder(self, session_id: int, sent_at: datetime) -> None:
         with self.connect() as db:
@@ -199,6 +229,21 @@ class Database:
     def recent_sessions(self, start: datetime, end: datetime, now: datetime, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.overlapping_sessions(start, end, now)
         return list(reversed(rows[-limit:]))
+
+    def breaks_for_sessions(self, session_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        if not session_ids:
+            return {}
+        placeholders = ",".join("?" for _ in session_ids)
+        with self.connect() as db:
+            rows = db.execute(
+                f"SELECT * FROM session_breaks WHERE session_id IN ({placeholders}) ORDER BY started_at",
+                session_ids,
+            ).fetchall()
+        result: dict[int, list[dict[str, Any]]] = {session_id: [] for session_id in session_ids}
+        for row in rows:
+            item = dict(row)
+            result[int(item["session_id"])].append(item)
+        return result
 
     def notification_exists(self, kind: str, period_key: str) -> bool:
         with self.connect() as db:

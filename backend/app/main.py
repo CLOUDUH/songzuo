@@ -21,9 +21,10 @@ from .database import Database
 from .detector import create_detector
 from .monitor import Monitor
 from .notifications import Notifier
+from .notification_settings import NotificationSettingsStore
 from .reports import ReportScheduler
-from .schemas import CameraSettingsUpdate, SettingsUpdate
-from .stats import boundaries, series, summarize
+from .schemas import CameraSettingsUpdate, NotificationSettingsUpdate, SettingsUpdate
+from .stats import boundaries, period_report, same_time_comparison, series, summarize
 
 logging.basicConfig(level=config.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -36,14 +37,17 @@ async def lifespan(app: FastAPI):
     db.initialize()
     camera_store = CameraSettingsStore(config.camera_settings_path)
     runtime_config = camera_store.load(config)
+    notification_store = NotificationSettingsStore(config.notification_settings_path)
+    notification_config = notification_store.load(config)
     detector = create_detector(config.detector_mode, config.model_path, config.detector_input_size)
     camera = MjpegReader(runtime_config)
-    notifier = Notifier(config)
+    notifier = Notifier(notification_config)
     monitor = Monitor(db, camera, detector, notifier)
     reports = ReportScheduler(db, notifier, config.timezone)
     camera_alerts = CameraHealthAlerts(db, camera, notifier)
     app.state.db, app.state.camera, app.state.monitor = db, camera, monitor
     app.state.camera_store = camera_store
+    app.state.notification_store = notification_store
     app.state.camera_config_lock = asyncio.Lock()
     camera.start()
     tasks = [
@@ -63,6 +67,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="松坐 API", version="0.1.0", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+
+@app.middleware("http")
+async def cache_policy(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    else:
+        # SPA 入口永不复用旧 HTML，避免 Chrome 在镜像更新后继续引用旧 JS。
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def services(request: Request) -> tuple[Database, Monitor]:
@@ -86,11 +106,26 @@ def overview(request: Request, period: str = Query("week", pattern="^(day|week|m
     settings = db.settings()
     today = summarize(db, day_start, min(day_end, now), now)
     recent = db.recent_sessions(day_start, day_end, now)
+    status = monitor.status(settings["sedentary_minutes"])
     for row in recent:
         if row["ended_at"] is None:
-            row["duration_seconds"] = max(0, int((now - datetime.fromisoformat(row["started_at"])).total_seconds()))
+            row["duration_seconds"] = status["session_duration_seconds"]
         row["is_sedentary"] = bool(row["is_sedentary"])
-    return {"status": monitor.status(settings["sedentary_minutes"]), "today": today, "threshold_minutes": settings["sedentary_minutes"], "sessions": recent, "series": series(db, period, now, tz)}
+    return {
+        "status": status,
+        "today": today,
+        "comparison": same_time_comparison(db, now, tz),
+        "threshold_minutes": settings["sedentary_minutes"],
+        "sessions": recent,
+        "series": series(db, period, now, tz),
+    }
+
+
+@app.get("/api/report")
+def report(request: Request, period: str = Query("week", pattern="^(week|month)$")) -> dict:
+    db, _ = services(request)
+    now = datetime.now(timezone.utc)
+    return period_report(db, period, now, ZoneInfo(config.timezone))
 
 
 @app.get("/api/stats")
@@ -151,6 +186,26 @@ async def put_camera_settings(payload: CameraSettingsUpdate, request: Request) -
         result = CameraSettingsStore.public(candidate, online=True, error="")
         result.update({"validated": True, "message": "摄像头连接验证成功，监测服务已切换到新配置"})
         return result
+
+
+@app.get("/api/notifications/settings")
+def get_notification_settings(request: Request) -> dict:
+    _, monitor = services(request)
+    return NotificationSettingsStore.public(monitor.notifier.config)
+
+
+@app.put("/api/notifications/settings")
+def put_notification_settings(payload: NotificationSettingsUpdate, request: Request) -> dict:
+    _, monitor = services(request)
+    store: NotificationSettingsStore = request.app.state.notification_store
+    candidate = store.merge(monitor.notifier.config, payload.model_dump(mode="json"))
+    try:
+        store.save(candidate)
+    except OSError as exc:
+        logger.error("Unable to persist notification settings: %s", exc)
+        raise HTTPException(500, "推送配置无法写入数据目录") from exc
+    monitor.notifier.reconfigure(candidate)
+    return NotificationSettingsStore.public(candidate)
 
 
 @app.post("/api/notifications/test")

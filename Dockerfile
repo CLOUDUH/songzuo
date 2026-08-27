@@ -9,7 +9,7 @@ COPY src ./src
 RUN pnpm run build
 
 FROM python:3.12-slim AS runtime
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 STATIC_DIR=/app/static DATABASE_PATH=/app/data/songzuo.db
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 STATIC_DIR=/app/static DATABASE_PATH=/app/data/songzuo.db CAMERA_SETTINGS_PATH=/app/data/camera-settings.json NOTIFICATION_SETTINGS_PATH=/app/data/notification-settings.json
 WORKDIR /app
 RUN addgroup --gid 1000 songzuo && adduser --uid 1000 --ingroup songzuo --home /app --disabled-password --gecos "" songzuo
 COPY backend/requirements.txt ./requirements.txt

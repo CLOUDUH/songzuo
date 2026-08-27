@@ -1,4 +1,4 @@
-# 松坐（working-camera）
+# 松坐（songzuo）
 
 一个面向局域网 MJPEG 摄像头的轻量久坐监测服务：只分析“座位区域内是否有人”，记录坐下/离座时间与时长，达到阈值后通过 Bark 提醒，并提供日、周、月统计网页。
 
@@ -22,11 +22,12 @@ MJPEG 摄像头 → 字节流读取（只保留内存最新帧） → 低频人�
 - `320×320`、每 2–5 秒一次的低频检测；OpenCV 线程数可限制。
 - 推荐 YOLOv8n ONNX + OpenCV DNN，不安装 PyTorch/ONNX Runtime；没有模型时自动使用正脸/双向侧脸检测并以 OpenCV HOG 补偿，适合上半身被桌面遮挡的固定工位。
 - 仅当人物框中心位于可配置的座位 ROI 内才算“在座位上”。
-- 进入确认和离座延迟防抖，短暂遮挡不会切碎会话；离座时间回填到首次确认无人时刻。
+- 坐下/离座独立确认；可设置连续会话合并窗口，短暂离座仍归入同一次会话，但离座分钟数从坐姿与久坐时长中扣除。
 - SQLite 仅保存会话、设置和推送日志；摄像头 JPEG 只在内存保留最新一帧，不落盘、不保存视频。
 - 记录坐下时间、站起时间、持续时长、是否久坐、提醒时间和平均置信度。
-- 日/周/月汇总、逐次记录、实时状态、趋势图和响应式 Web 页面。
-- Bark 即时提醒、每日小结、每周报告，以及可选通用 JSON Webhook。
+- 今日首页、横向会话时间轴、同期周/月平均对比，以及独立的周/月汇总页面。
+- Bark Server、设备 Key、Webhook、提醒文案和汇总时间均可在 Web 设置；支持即时提醒、每日小结和每周报告。
+- 入口 HTML 禁止缓存、带哈希资源长期缓存，避免 Chrome 在容器更新后保留旧交互代码。
 - 摄像头断线自动重连；断线时不会误判成离座，并支持延迟离线提醒及恢复上线通知。
 
 ## 快速部署
@@ -34,7 +35,7 @@ MJPEG 摄像头 → 字节流读取（只保留内存最新帧） → 低频人�
 在现有 Docker VM 中执行：
 
 ```bash
-cd working-camera
+cd songzuo
 cp .env.example .env
 ```
 
@@ -43,7 +44,7 @@ cp .env.example .env
 1. 可以先保留默认摄像头配置，启动后在 Web 左侧点击“摄像头”，填写地址和认证信息并选择“测试并保存摄像头”。当前初始地址为 `http://192.168.1.80:2345/`，但有些设备首页和流地址不同。
 2. 也可以在首次启动前填写 `CAMERA_USERNAME` / `CAMERA_PASSWORD`。通过 Web 保存后，配置会写入 `data/camera-settings.json` 并优先于 `.env`；密码和 Cookie 不会通过 API 回传。
 3. Digest 认证把 `CAMERA_AUTH_TYPE` 改成 `digest`。若只能网页登录，可将浏览器登录后的 Cookie 临时放在 `CAMERA_COOKIE`。
-4. 从 Bark App 首页测试链接中复制 key 到 `BARK_DEVICE_KEY`。Web 页面中启用 Bark 后可以发送测试消息。
+4. Bark 无需写入 `.env`：启动后进入 Web 的“消息推送”，粘贴设备 Key 或 Bark App 的完整测试链接，再选择“保存并测试”。
 
 然后启动：
 
@@ -62,7 +63,7 @@ docker compose logs -f --tail=100
 
 Docker Standalone 环境可在 Portainer 中选择 `Stacks → Add stack → Git repository`，仓库指向 `https://github.com/CLOUDUH/songzuo.git`，Repository reference 填 `refs/heads/main`，Compose path 填 `portainer-stack.yml`。该文件通过 Compose 的 `${变量名}` 直接接收 Portainer 页面中填写的环境变量，无需在 Git 仓库中保存 `stack.env`，并用命名卷 `songzuo-data`、`songzuo-models` 保留数据。
 
-至少设置 `TZ=Asia/Shanghai`；需要 Bark 时再设置 `BARK_SERVER` 和 `BARK_DEVICE_KEY`。摄像头地址与账号密码可以部署完成后直接在 Web 页面设置。
+Portainer 只需保留 `TZ=Asia/Shanghai`、检测器与资源限制等运行参数。摄像头、Bark 和 Webhook 均在部署完成后的 Web 页面设置，不需要把秘密放进 Stack 环境变量。
 
 Portainer 对 Git Stack 内 `build:` 的支持取决于版本和环境连接方式。如果部署日志显示构建步骤失败，应先在 CI 或 Docker 主机上构建并推送镜像，再把 `portainer-stack.yml` 中的 `image` 改为实际镜像地址并删除 `build` 段。
 
@@ -97,18 +98,19 @@ Web 设置中的采样间隔先选 3 秒。如果仍需省资源，改为 5 秒�
 ## 统计口径
 
 - 坐下：连续两次采样在座位 ROI 内检测到人物，从第一次检测时刻起算。
-- 站起：持续无人超过“离座结束延迟”后结束会话，但结束时间记为第一次无人时刻。
-- 久坐：单次会话达到设定阈值即标记，提醒每个会话只尝试一次。
+- 站起：持续无人超过“离座确认时间”后立即显示离座；结束时间仍记为第一次无人时刻。
+- 短暂离座：在“连续会话合并窗口”内返回时仍属于同一次会话，离座区间保存在 `session_breaks` 并从坐姿时长扣除。
+- 久坐：单次会话扣除全部离座时间后达到阈值才标记，提醒每个会话只尝试一次。
 - 日/周/月：按 `TZ` 配置的本地时区切分；跨午夜会话按实际重叠时长计入各天。
 - 当前未结束会话也实时计入统计。
 
-SQLite 文件位于 `data/songzuo.db`，WAL 模式并为常用时间查询建了索引。摄像头 Web 配置位于权限为 `0600` 的 `data/camera-settings.json`；备份整个 `data` 目录时应像保护密码一样保护备份。图片与视频无需清理，因为从不写盘。
+SQLite 文件位于 `data/songzuo.db`，WAL 模式并为常用时间查询建了索引。摄像头与推送秘密分别位于权限为 `0600` 的 `data/camera-settings.json`、`data/notification-settings.json`；备份整个 `data` 目录时应像保护密码一样保护备份。图片与视频无需清理，因为从不写盘。
 
 ## Bark 与其他推送
 
 Bark 很适合这套 Apple 设备组合：iPhone 收到的系统通知可按 Watch 的通知设置同步到 Apple Watch，也无需为项目申请 APNs 证书。服务使用 Bark V2 JSON `POST /push` 接口，支持官方服务或自建 Bark Server。
 
-如果以后已有 Home Assistant / MQTT，可将 `GENERIC_WEBHOOK_URL` 指向一个自动化入口，再由它分发到多个平台；在当前单人、Apple 设备为主的场景中，Bark 是更精简的选择。
+如果以后已有 Home Assistant / MQTT，可在 Web 中配置通用 Webhook，再由它分发到多个平台；在当前单人、Apple 设备为主的场景中，Bark 是更精简的选择。
 
 ## 本地开发与测试
 
@@ -133,10 +135,12 @@ python -m pytest backend/tests
 ## 主要 API
 
 - `GET /api/overview?period=day|week|month`：仪表盘数据
+- `GET /api/report?period=week|month`：独立周期报告
 - `GET /api/stats`：今日、本周、本月汇总
 - `GET /api/sessions?period=day|week|month`：会话明细
 - `GET/PUT /api/settings`：监测、提醒和 ROI 参数
 - `GET/PUT /api/camera/settings`：读取脱敏配置、验证并安全切换摄像头
+- `GET/PUT /api/notifications/settings`：读取脱敏状态、保存 Bark/Webhook 配置
 - `POST /api/notifications/test`：测试推送
 - `GET /api/health`：容器、摄像头和检测器状态
 

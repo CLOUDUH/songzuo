@@ -16,7 +16,11 @@ test("dashboard is product-specific and API-connected", async () => {
   assert.match(page, /\/api\/camera\/settings/);
   assert.match(page, /测试并保存摄像头/);
   assert.match(page, /摄像头离线提醒/);
-  assert.match(page, /坐姿趋势/);
+  assert.match(page, /\/api\/notifications\/settings/);
+  assert.match(page, /连续会话合并窗口/);
+  assert.match(page, /今日时间轴/);
+  assert.match(page, /周与月汇总/);
+  assert.match(page, /近 7 日同期平均/);
   assert.match(css, /prefers-reduced-motion/);
   assert.doesNotMatch(page + html, /SkeletonPreview|codex-preview|Your site is taking shape/);
 });
