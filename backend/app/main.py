@@ -107,10 +107,12 @@ def overview(request: Request, period: str = Query("week", pattern="^(day|week|m
     today = summarize(db, day_start, min(day_end, now), now)
     recent = db.recent_sessions(day_start, day_end, now)
     status = monitor.status(settings["sedentary_minutes"])
+    break_map = db.breaks_for_sessions([int(row["id"]) for row in recent])
     for row in recent:
         if row["ended_at"] is None:
             row["duration_seconds"] = status["session_duration_seconds"]
         row["is_sedentary"] = bool(row["is_sedentary"])
+        row["breaks"] = break_map.get(int(row["id"]), [])
     return {
         "status": status,
         "today": today,

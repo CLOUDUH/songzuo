@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type Session = { id:number; started_at:string; ended_at:string|null; duration_seconds:number; is_sedentary:boolean; away_seconds?:number };
+type SessionBreak = { id:number; started_at:string; ended_at:string; duration_seconds:number };
+type Session = { id:number; started_at:string; ended_at:string|null; duration_seconds:number; is_sedentary:boolean; away_seconds?:number; breaks?:SessionBreak[] };
 type SeriesItem = { label:string; seconds:number; sedentary_count:number };
 type Summary = { total_seconds:number; sedentary_count:number; longest_seconds:number; session_count:number };
 type Comparison = { as_of:string; today_seconds:number; week_average_seconds:number; month_average_seconds:number; week_change_percent:number|null; month_change_percent:number|null; week_sample_days:number; month_sample_days:number };
@@ -41,18 +42,17 @@ async function api<T>(path:string,init?:RequestInit):Promise<T>{
 }
 const formatDuration=(seconds:number)=>{const minutes=Math.max(0,Math.floor(seconds/60));const hours=Math.floor(minutes/60);return hours?`${hours}小时${minutes%60?` ${minutes%60}分`:""}`:`${minutes}分钟`;};
 const hhmm=(iso:string|null)=>iso?new Intl.DateTimeFormat("zh-CN",{hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(iso)):"现在";
-const localMinutes=(iso:string|null)=>{const date=iso?new Date(iso):new Date();return date.getHours()*60+date.getMinutes();};
 const changeLabel=(value:number|null)=>value===null?"暂无历史基线":value===0?"与平均持平":value<0?`减少 ${Math.abs(value).toFixed(1)}%`:`增加 ${value.toFixed(1)}%`;
 
 function Timeline({sessions}:{sessions:Session[]}){
-  const ordered=[...sessions].reverse();
-  return <div className="timeline-wrap">
-    <div className="timeline-axis">{[0,4,8,12,16,20,24].map(hour=><span key={hour} style={{left:`${hour/24*100}%`}}>{String(hour).padStart(2,"0")}:00</span>)}</div>
-    <div className="timeline-line">
-      {ordered.map(session=>{const today=new Date().toDateString();const startDate=new Date(session.started_at);const endDate=session.ended_at?new Date(session.ended_at):new Date();const start=startDate.toDateString()===today?localMinutes(session.started_at):0;const end=endDate.toDateString()===today?localMinutes(session.ended_at):1440;const left=start/1440*100;const width=Math.max((end-start)/1440*100,.8);return <div key={session.id} className={`timeline-session ${session.is_sedentary?"long":""} ${session.ended_at?"":"active"}`} style={{left:`${left}%`,width:`${width}%`}} title={`${hhmm(session.started_at)}–${hhmm(session.ended_at)}，${formatDuration(session.duration_seconds)}`}><i/><span className="time-start">{hhmm(session.started_at)}</span><span className="time-end">{hhmm(session.ended_at)}</span><small>{formatDuration(session.duration_seconds)}</small></div>;})}
-    </div>
-    {!ordered.length&&<div className="timeline-empty">今天还没有坐姿记录</div>}
-  </div>;
+  const ordered=[...sessions].sort((a,b)=>new Date(a.started_at).getTime()-new Date(b.started_at).getTime());
+  if(!ordered.length)return <div className="timeline-empty">今天还没有坐姿记录</div>;
+  const now=Date.now();const today=new Date();const dayStart=new Date(today.getFullYear(),today.getMonth(),today.getDate()).getTime();const dayEnd=dayStart+86400000;
+  const clipped=ordered.map(session=>({session,start:Math.max(dayStart,new Date(session.started_at).getTime()),end:Math.min(dayEnd,session.ended_at?new Date(session.ended_at).getTime():now)})).filter(item=>item.end>item.start);
+  if(!clipped.length)return <div className="timeline-empty">今天还没有有效的坐姿区间</div>;
+  const domainStart=Math.min(...clipped.map(item=>item.start));let domainEnd=Math.max(...clipped.map(item=>item.end));if(domainEnd-domainStart<60000)domainEnd=domainStart+60000;const span=domainEnd-domainStart;
+  const segments=clipped.flatMap(({session,start,end})=>{const breaks=[...(session.breaks||[])].sort((a,b)=>new Date(a.started_at).getTime()-new Date(b.started_at).getTime());const result:{start:number;end:number;long:boolean;active:boolean}[]=[];let cursor=start;for(const item of breaks){const breakStart=Math.max(start,new Date(item.started_at).getTime());const breakEnd=Math.min(end,new Date(item.ended_at).getTime());if(breakStart>cursor)result.push({start:cursor,end:breakStart,long:session.is_sedentary,active:false});cursor=Math.max(cursor,breakEnd);}if(end>cursor)result.push({start:cursor,end,long:session.is_sedentary,active:!session.ended_at});return result;});
+  return <div className="timeline-wrap"><div className="timeline-meta"><span className="timeline-range">{hhmm(new Date(domainStart).toISOString())}–{hhmm(new Date(domainEnd).toISOString())}</span><span className="timeline-legend"><i className="seated"/>坐姿<i className="away"/>离座</span></div><div className="timeline-line">{segments.map((segment,index)=><span key={index} className={`timeline-session ${segment.long?"long":""} ${segment.active?"active":""}`} style={{left:`${(segment.start-domainStart)/span*100}%`,width:`${Math.max((segment.end-segment.start)/span*100,.5)}%`}}/>)}</div><div className="timeline-list">{ordered.map((session,index)=><div className="timeline-list-row" key={session.id}><span className="session-number">{String(index+1).padStart(2,"0")}</span><div><b>{hhmm(session.started_at)} <i/> {hhmm(session.ended_at)}</b><small>{session.ended_at?"已结束":"进行中"}{(session.away_seconds||0)>0?` · 离座 ${formatDuration(session.away_seconds||0)}`:""}</small></div><strong>{formatDuration(session.duration_seconds)}</strong><span className={session.is_sedentary?"badge long":"badge"}>{session.is_sedentary?"久坐":"正常"}</span></div>)}</div></div>;
 }
 
 function TrendChart({items}:{items:SeriesItem[]}){
