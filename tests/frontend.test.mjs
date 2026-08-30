@@ -18,6 +18,7 @@ test("dashboard is product-specific and API-connected", async () => {
   assert.match(page, /摄像头离线提醒/);
   assert.match(page, /\/api\/notifications\/settings/);
   assert.match(page, /连续会话合并窗口/);
+  assert.match(page, /人脸置信度/);
   assert.match(page, /今日时间轴/);
   assert.match(page, /timeline-list-row/);
   assert.doesNotMatch(page, /timeline-axis/);

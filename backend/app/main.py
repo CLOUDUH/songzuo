@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
     runtime_config = camera_store.load(config)
     notification_store = NotificationSettingsStore(config.notification_settings_path)
     notification_config = notification_store.load(config)
-    detector = create_detector(config.detector_mode, config.model_path, config.detector_input_size)
+    detector = create_detector(config.detector_mode, config.model_path, config.face_model_path, config.detector_input_size)
     camera = MjpegReader(runtime_config)
     notifier = Notifier(notification_config)
     monitor = Monitor(db, camera, detector, notifier)

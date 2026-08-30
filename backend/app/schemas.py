@@ -9,6 +9,8 @@ class SettingsUpdate(BaseModel):
     leave_confirm_seconds: int = Field(ge=3, le=120)
     merge_gap_seconds: int = Field(ge=15, le=1800)
     sample_interval_seconds: int = Field(ge=1, le=30)
+    face_confidence_threshold: float = Field(ge=0.35, le=0.95)
+    min_face_width_ratio: float = Field(ge=0.05, le=0.40)
     daily_report_enabled: bool
     daily_report_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     weekly_report_enabled: bool

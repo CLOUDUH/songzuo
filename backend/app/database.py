@@ -13,6 +13,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "leave_confirm_seconds": 9,
     "merge_gap_seconds": 120,
     "sample_interval_seconds": 3,
+    "face_confidence_threshold": 0.60,
+    "min_face_width_ratio": 0.09,
     "daily_report_enabled": 1,
     "daily_report_time": "20:30",
     "weekly_report_enabled": 1,
@@ -62,6 +64,8 @@ class Database:
                     leave_confirm_seconds INTEGER NOT NULL CHECK (leave_confirm_seconds BETWEEN 3 AND 120),
                     merge_gap_seconds INTEGER NOT NULL CHECK (merge_gap_seconds BETWEEN 15 AND 1800),
                     sample_interval_seconds INTEGER NOT NULL CHECK (sample_interval_seconds BETWEEN 1 AND 30),
+                    face_confidence_threshold REAL NOT NULL CHECK (face_confidence_threshold BETWEEN 0.35 AND 0.95),
+                    min_face_width_ratio REAL NOT NULL CHECK (min_face_width_ratio BETWEEN 0.05 AND 0.40),
                     daily_report_enabled INTEGER NOT NULL CHECK (daily_report_enabled IN (0, 1)),
                     daily_report_time TEXT NOT NULL,
                     weekly_report_enabled INTEGER NOT NULL CHECK (weekly_report_enabled IN (0, 1)),
@@ -122,6 +126,8 @@ class Database:
                 "camera_recovery_alert_enabled": "ALTER TABLE settings ADD COLUMN camera_recovery_alert_enabled INTEGER NOT NULL DEFAULT 1 CHECK (camera_recovery_alert_enabled IN (0, 1))",
                 "leave_confirm_seconds": "ALTER TABLE settings ADD COLUMN leave_confirm_seconds INTEGER NOT NULL DEFAULT 9 CHECK (leave_confirm_seconds BETWEEN 3 AND 120)",
                 "merge_gap_seconds": "ALTER TABLE settings ADD COLUMN merge_gap_seconds INTEGER NOT NULL DEFAULT 120 CHECK (merge_gap_seconds BETWEEN 15 AND 1800)",
+                "face_confidence_threshold": "ALTER TABLE settings ADD COLUMN face_confidence_threshold REAL NOT NULL DEFAULT 0.60 CHECK (face_confidence_threshold BETWEEN 0.35 AND 0.95)",
+                "min_face_width_ratio": "ALTER TABLE settings ADD COLUMN min_face_width_ratio REAL NOT NULL DEFAULT 0.09 CHECK (min_face_width_ratio BETWEEN 0.05 AND 0.40)",
             }
             for column, statement in migrations.items():
                 if column not in existing_columns:

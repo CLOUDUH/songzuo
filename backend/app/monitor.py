@@ -9,7 +9,7 @@ import numpy as np
 
 from .camera import MjpegReader
 from .database import Database
-from .detector import Detection, HogPersonDetector, HybridPersonDetector, YoloPersonDetector
+from .detector import Detection, HogPersonDetector, HybridPersonDetector, YuNetSeatDetector, YoloPersonDetector
 from .notifications import Notifier
 from .stats import format_duration, parse_datetime
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class Monitor:
-    def __init__(self, db: Database, camera: MjpegReader, detector: HybridPersonDetector | HogPersonDetector | YoloPersonDetector, notifier: Notifier):
+    def __init__(self, db: Database, camera: MjpegReader, detector: HybridPersonDetector | HogPersonDetector | YuNetSeatDetector | YoloPersonDetector, notifier: Notifier):
         self.db, self.camera, self.detector, self.notifier = db, camera, detector, notifier
         active = db.active_session()
         self.session_id: int | None = int(active["id"]) if active else None
@@ -29,6 +29,7 @@ class Monitor:
         self.absent_since: datetime | None = None
         self.last_check: datetime | None = None
         self.confidence = 0.0
+        self.last_boxes: tuple[tuple[int, int, int, int], ...] = ()
         self._last_frame_at: datetime | None = None
         self._stop = asyncio.Event()
 
@@ -40,7 +41,7 @@ class Monitor:
                 self._last_frame_at = snapshot.captured_at
                 frame = cv2.imdecode(np.frombuffer(snapshot.jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if frame is not None:
-                    roi = {key: float(settings[key]) for key in ("roi_x", "roi_y", "roi_w", "roi_h")}
+                    roi = {key: float(settings[key]) for key in ("roi_x", "roi_y", "roi_w", "roi_h", "face_confidence_threshold", "min_face_width_ratio")}
                     try:
                         detection = await asyncio.to_thread(self.detector.detect, frame, roi)
                         await self.process(detection, datetime.now(timezone.utc), settings)
@@ -101,6 +102,7 @@ class Monitor:
     async def process(self, detection: Detection, now: datetime, settings: dict) -> None:
         self.last_check = now
         self.confidence = detection.confidence
+        self.last_boxes = detection.boxes
         present_confirm = max(2, int(settings["sample_interval_seconds"]) * 2)
         leave_confirm = int(settings["leave_confirm_seconds"])
         merge_gap = int(settings["merge_gap_seconds"])
@@ -181,6 +183,7 @@ class Monitor:
             "session_duration_seconds": elapsed,
             "pending_resume": self.session_id is not None and not self.occupied,
             "confidence": self.confidence,
+            "detection_boxes": [list(box) for box in self.last_boxes],
             "last_check": self.last_check.isoformat() if self.last_check else None,
             "next_reminder_seconds": remaining,
         }

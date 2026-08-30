@@ -116,6 +116,53 @@ class HybridPersonDetector:
         return face_result if face_result.present else self.hog.detect(frame, roi)
 
 
+class YuNetSeatDetector:
+    """使用轻量 YuNet DNN 在固定座位区域内检测近景人脸。"""
+
+    name = "seat-yunet"
+
+    def __init__(self, model_path: Path):
+        self.detector = cv2.FaceDetectorYN.create(str(model_path), "", (320, 320), 0.35, 0.3, 50)
+
+    def detect(self, frame: np.ndarray[Any, Any], roi: dict[str, float]) -> Detection:
+        x0, y0, x1, y1 = _roi_bounds(frame.shape, roi)
+        crop = frame[y0:y1, x0:x1]
+        if crop.size == 0:
+            return Detection(False, 0.0)
+        crop_height, crop_width = crop.shape[:2]
+        self.detector.setInputSize((crop_width, crop_height))
+        _, faces = self.detector.detect(crop)
+        if faces is None:
+            return Detection(False, 0.0)
+
+        confidence_threshold = float(roi.get("face_confidence_threshold", 0.60))
+        min_width_ratio = float(roi.get("min_face_width_ratio", 0.09))
+        accepted: list[tuple[int, int, int, int]] = []
+        scores: list[float] = []
+        for face in faces:
+            x, y, width, height = (float(value) for value in face[:4])
+            score = float(face[14])
+            center_x = (x + width / 2) / crop_width
+            center_y = (y + height / 2) / crop_height
+            width_ratio = width / crop_width
+            height_ratio = height / crop_height
+            aspect_ratio = width / max(height, 1)
+            # 当前固定工位中，真实坐姿人脸是 ROI 内的近景目标；排除远处人员、
+            # 椅背网格和显示器边缘产生的小框或位置异常框。
+            if not (
+                score >= confidence_threshold
+                and width_ratio >= min_width_ratio
+                and height_ratio >= 0.14
+                and 0.35 <= aspect_ratio <= 1.30
+                and 0.08 <= center_x <= 0.74
+                and 0.02 <= center_y <= 0.62
+            ):
+                continue
+            accepted.append((int(x0 + x), int(y0 + y), int(width), int(height)))
+            scores.append(score)
+        return Detection(bool(accepted), max(scores, default=0.0), tuple(accepted))
+
+
 class YoloPersonDetector:
     """使用 OpenCV DNN 执行 YOLOv8n ONNX，避免额外引入 PyTorch/ONNX Runtime。"""
 
@@ -162,11 +209,19 @@ class YoloPersonDetector:
         return Detection(bool(accepted), max(accepted_scores, default=0.0), tuple(accepted))
 
 
-def create_detector(mode: str, model_path: Path, input_size: int) -> HybridPersonDetector | HogPersonDetector | YoloPersonDetector:
-    if mode in {"auto", "yolo"} and model_path.is_file():
+def create_detector(mode: str, model_path: Path, face_model_path: Path, input_size: int) -> HybridPersonDetector | HogPersonDetector | YuNetSeatDetector | YoloPersonDetector:
+    if mode == "auto" and face_model_path.is_file():
+        return YuNetSeatDetector(face_model_path)
+    if mode == "yolo" and model_path.is_file():
         return YoloPersonDetector(model_path, input_size)
     if mode == "yolo":
         raise FileNotFoundError(f"未找到 ONNX 模型：{model_path}")
+    if mode == "yunet":
+        if not face_model_path.is_file():
+            raise FileNotFoundError(f"未找到 YuNet 模型：{face_model_path}")
+        return YuNetSeatDetector(face_model_path)
     if mode == "hog":
         return HogPersonDetector(input_size)
+    if mode == "haar":
+        return HybridPersonDetector(input_size)
     return HybridPersonDetector(input_size)

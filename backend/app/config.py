@@ -26,6 +26,7 @@ class Config:
     camera_verify_tls: bool = os.getenv("CAMERA_VERIFY_TLS", "true").lower() == "true"
     detector_mode: str = os.getenv("DETECTOR_MODE", "auto").lower()
     model_path: Path = Path(os.getenv("MODEL_PATH", "/app/models/yolov8n.onnx"))
+    face_model_path: Path = Path(os.getenv("FACE_MODEL_PATH", "/app/assets/face_detection_yunet_2023mar.onnx"))
     detector_input_size: int = _int("DETECTOR_INPUT_SIZE", 320)
     opencv_threads: int = _int("OPENCV_THREADS", 2)
     timezone: str = os.getenv("TZ", "Asia/Shanghai")

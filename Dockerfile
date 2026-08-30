@@ -9,12 +9,13 @@ COPY src ./src
 RUN pnpm run build
 
 FROM python:3.12-slim AS runtime
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 STATIC_DIR=/app/static DATABASE_PATH=/app/data/songzuo.db CAMERA_SETTINGS_PATH=/app/data/camera-settings.json NOTIFICATION_SETTINGS_PATH=/app/data/notification-settings.json
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 STATIC_DIR=/app/static DATABASE_PATH=/app/data/songzuo.db CAMERA_SETTINGS_PATH=/app/data/camera-settings.json NOTIFICATION_SETTINGS_PATH=/app/data/notification-settings.json FACE_MODEL_PATH=/app/assets/face_detection_yunet_2023mar.onnx
 WORKDIR /app
 RUN addgroup --gid 1000 songzuo && adduser --uid 1000 --ingroup songzuo --home /app --disabled-password --gecos "" songzuo
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
+COPY backend/assets ./assets
 COPY --from=web /web/dist ./static
 RUN mkdir -p /app/data /app/models && chown -R songzuo:songzuo /app
 USER songzuo
