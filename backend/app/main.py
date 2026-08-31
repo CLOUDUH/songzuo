@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -20,11 +20,12 @@ from .config import config
 from .database import Database
 from .detector import create_detector
 from .monitor import Monitor
+from .maintenance import apply_requested_history_repairs
 from .notifications import Notifier
 from .notification_settings import NotificationSettingsStore
 from .reports import ReportScheduler
 from .schemas import CameraSettingsUpdate, NotificationSettingsUpdate, SettingsUpdate
-from .stats import boundaries, period_report, same_time_comparison, series, summarize
+from .stats import boundaries, day_detail, period_report, same_time_comparison, series, summarize
 
 logging.basicConfig(level=config.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ async def lifespan(app: FastAPI):
     cv2.setNumThreads(max(1, config.opencv_threads))
     db = Database(config.database_path)
     db.initialize()
+    if apply_requested_history_repairs(db, config.timezone):
+        logger.info("Applied requested history repair for 2026-08-28 through 2026-08-30")
     camera_store = CameraSettingsStore(config.camera_settings_path)
     runtime_config = camera_store.load(config)
     notification_store = NotificationSettingsStore(config.notification_settings_path)
@@ -128,6 +131,23 @@ def report(request: Request, period: str = Query("week", pattern="^(week|month)$
     db, _ = services(request)
     now = datetime.now(timezone.utc)
     return period_report(db, period, now, ZoneInfo(config.timezone))
+
+
+@app.get("/api/day")
+def day(request: Request, date_value: str = Query(alias="date", pattern=r"^\d{4}-\d{2}-\d{2}$")) -> dict:
+    db, monitor = services(request)
+    try:
+        target = date.fromisoformat(date_value)
+    except ValueError as exc:
+        raise HTTPException(422, "日期格式必须为 YYYY-MM-DD") from exc
+    now = datetime.now(timezone.utc)
+    result = day_detail(db, target, now, ZoneInfo(config.timezone))
+    if target == now.astimezone(ZoneInfo(config.timezone)).date():
+        status = monitor.status(db.settings()["sedentary_minutes"])
+        for row in result["sessions"]:
+            if row["ended_at"] is None:
+                row["duration_seconds"] = status["session_duration_seconds"]
+    return result
 
 
 @app.get("/api/stats")

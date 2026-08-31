@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -111,6 +112,12 @@ class Database:
                 CREATE TABLE IF NOT EXISTS app_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS repair_backups (
+                    id INTEGER PRIMARY KEY,
+                    repair_key TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
                 CREATE INDEX IF NOT EXISTS idx_sessions_ended_at ON sessions(ended_at);
@@ -250,6 +257,59 @@ class Database:
             item = dict(row)
             result[int(item["session_id"])].append(item)
         return result
+
+    def replace_sessions_for_repair(
+        self,
+        repair_key: str,
+        range_start: datetime,
+        range_end: datetime,
+        replacements: list[tuple[datetime, datetime]],
+    ) -> bool:
+        """备份并替换一个明确时间范围内的会话；同一 repair_key 只执行一次。"""
+        with self.connect() as db:
+            if db.execute("SELECT 1 FROM app_meta WHERE key = ?", (repair_key,)).fetchone():
+                return False
+            rows = db.execute(
+                """SELECT * FROM sessions
+                   WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
+                   ORDER BY started_at""",
+                (range_end.isoformat(), range_end.isoformat(), range_start.isoformat()),
+            ).fetchall()
+            sessions = [dict(row) for row in rows]
+            ids = [int(row["id"]) for row in sessions]
+            breaks: list[dict[str, Any]] = []
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                breaks = [dict(row) for row in db.execute(f"SELECT * FROM session_breaks WHERE session_id IN ({placeholders}) ORDER BY started_at", ids).fetchall()]
+            backup = {
+                "range_start": range_start.isoformat(),
+                "range_end": range_end.isoformat(),
+                "sessions": sessions,
+                "breaks": breaks,
+            }
+            db.execute(
+                "INSERT INTO repair_backups(repair_key, created_at, payload) VALUES (?, ?, ?)",
+                (repair_key, datetime.now().astimezone().isoformat(), json.dumps(backup, ensure_ascii=False)),
+            )
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                db.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", ids)
+            threshold_row = db.execute("SELECT sedentary_minutes FROM settings WHERE id = 1").fetchone()
+            threshold_seconds = int(threshold_row[0]) * 60 if threshold_row else 3600
+            for started_at, ended_at in replacements:
+                duration = max(0, int((ended_at - started_at).total_seconds()))
+                db.execute(
+                    """INSERT INTO sessions(started_at, ended_at, duration_seconds, is_sedentary, average_confidence, samples, away_seconds)
+                       VALUES (?, ?, ?, ?, 1.0, 0, 0)""",
+                    (started_at.isoformat(), ended_at.isoformat(), duration, int(duration >= threshold_seconds)),
+                )
+            db.execute("INSERT INTO app_meta(key, value) VALUES (?, ?)", (repair_key, "completed"))
+        return True
+
+    def repair_backup(self, repair_key: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT payload FROM repair_backups WHERE repair_key = ?", (repair_key,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def notification_exists(self, kind: str, period_key: str) -> bool:
         with self.connect() as db:

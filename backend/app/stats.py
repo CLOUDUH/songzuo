@@ -152,6 +152,40 @@ def period_report(db: Database, period: str, now: datetime, tz: ZoneInfo) -> dic
     }
 
 
+def day_detail(db: Database, target_date: date, now: datetime, tz: ZoneInfo) -> dict[str, Any]:
+    local_start = datetime.combine(target_date, time.min, tzinfo=tz)
+    local_end = local_start + timedelta(days=1)
+    start = local_start.astimezone(timezone.utc)
+    end = local_end.astimezone(timezone.utc)
+    effective_end = min(end, now) if target_date == now.astimezone(tz).date() else end
+    summary = summarize(db, start, effective_end, now)
+    sessions = db.overlapping_sessions(start, end, now)
+    break_map = db.breaks_for_sessions([int(row["id"]) for row in sessions])
+    total_break_seconds = 0
+    for row in sessions:
+        row["is_sedentary"] = bool(row["is_sedentary"])
+        row["breaks"] = break_map.get(int(row["id"]), [])
+        total_break_seconds += sum(int(item["duration_seconds"]) for item in row["breaks"])
+    first_started_at = sessions[0]["started_at"] if sessions else None
+    last_ended_at = (sessions[-1]["ended_at"] or now.isoformat()) if sessions else None
+    span_seconds = 0
+    if first_started_at and last_ended_at:
+        span_seconds = max(0, int((min(parse_datetime(last_ended_at), end) - max(parse_datetime(first_started_at), start)).total_seconds()))
+    seated_ratio = round(summary["total_seconds"] / span_seconds * 100, 1) if span_seconds else 0.0
+    return {
+        "date": target_date.isoformat(),
+        "summary": summary,
+        "sessions": sessions,
+        "analysis": {
+            "first_started_at": first_started_at,
+            "last_ended_at": last_ended_at,
+            "total_break_seconds": total_break_seconds,
+            "average_session_seconds": int(summary["total_seconds"] / summary["session_count"]) if summary["session_count"] else 0,
+            "seated_ratio_percent": seated_ratio,
+        },
+    }
+
+
 def format_duration(seconds: int) -> str:
     minutes = max(0, seconds // 60)
     hours, minutes = divmod(minutes, 60)
