@@ -27,6 +27,8 @@ test("dashboard is product-specific and API-connected", async () => {
   assert.match(page, /近 7 日同期平均/);
   assert.match(page, /指定日期详情/);
   assert.match(page, /系统设置/);
+  assert.match(page, /settings-form-grid/);
+  assert.match(css, /settings-page-grid\{grid-template-columns:1fr/);
   assert.doesNotMatch(page, /modal-backdrop/);
   assert.match(css, /prefers-reduced-motion/);
   assert.doesNotMatch(page + html, /SkeletonPreview|codex-preview|Your site is taking shape/);
