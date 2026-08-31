@@ -27,6 +27,10 @@ class SettingsUpdate(BaseModel):
     camera_recovery_alert_enabled: bool
     reminder_title: str = Field(min_length=1, max_length=80)
     reminder_body: str = Field(min_length=1, max_length=300)
+    repeat_reminder_enabled: bool
+    repeat_reminder_minutes: int = Field(ge=5, le=360)
+    repeat_reminder_title: str = Field(min_length=1, max_length=120)
+    repeat_reminder_body: str = Field(min_length=1, max_length=1000)
     roi_x: float = Field(ge=0, le=1)
     roi_y: float = Field(ge=0, le=1)
     roi_w: float = Field(gt=0, le=1)

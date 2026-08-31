@@ -39,6 +39,9 @@ def test_settings_are_persisted_and_secrets_are_not_fields(tmp_path: Path) -> No
     assert settings["min_face_width_ratio"] == 0.09
     assert "{yesterday_date}" in settings["daily_report_title"]
     assert "{week_total}" in settings["weekly_report_body"]
+    assert settings["repeat_reminder_enabled"] is True
+    assert settings["repeat_reminder_minutes"] == 30
+    assert "{repeat_count}" in settings["repeat_reminder_title"]
     assert (settings["roi_x"], settings["roi_y"], settings["roi_w"], settings["roi_h"]) == (0.13, 0.54, 0.37, 0.43)
     assert "camera_password" not in settings
 

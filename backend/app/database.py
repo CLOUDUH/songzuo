@@ -32,6 +32,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "camera_recovery_alert_enabled": 1,
     "reminder_title": "该起身活动啦",
     "reminder_body": "你已经连续坐了 {duration}，走动几分钟吧。",
+    "repeat_reminder_enabled": 1,
+    "repeat_reminder_minutes": 30,
+    "repeat_reminder_title": "久坐提醒 · 第 {repeat_count} 次追加提醒",
+    "repeat_reminder_body": "你已经坐了 {duration}，距上次提醒又过去 {interval}，请尽快起身活动。",
     "roi_x": 0.13,
     "roi_y": 0.54,
     "roi_w": 0.37,
@@ -87,6 +91,10 @@ class Database:
                     camera_recovery_alert_enabled INTEGER NOT NULL CHECK (camera_recovery_alert_enabled IN (0, 1)),
                     reminder_title TEXT NOT NULL,
                     reminder_body TEXT NOT NULL,
+                    repeat_reminder_enabled INTEGER NOT NULL CHECK (repeat_reminder_enabled IN (0, 1)),
+                    repeat_reminder_minutes INTEGER NOT NULL CHECK (repeat_reminder_minutes BETWEEN 5 AND 360),
+                    repeat_reminder_title TEXT NOT NULL,
+                    repeat_reminder_body TEXT NOT NULL,
                     roi_x REAL NOT NULL, roi_y REAL NOT NULL, roi_w REAL NOT NULL, roi_h REAL NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -97,6 +105,9 @@ class Database:
                     duration_seconds INTEGER NOT NULL DEFAULT 0,
                     is_sedentary INTEGER NOT NULL DEFAULT 0 CHECK (is_sedentary IN (0, 1)),
                     reminder_sent_at TEXT,
+                    reminder_count INTEGER NOT NULL DEFAULT 0,
+                    last_reminder_at TEXT,
+                    last_reminder_elapsed_seconds INTEGER NOT NULL DEFAULT 0,
                     average_confidence REAL NOT NULL DEFAULT 0,
                     samples INTEGER NOT NULL DEFAULT 0,
                     away_seconds INTEGER NOT NULL DEFAULT 0
@@ -147,6 +158,10 @@ class Database:
                 "daily_report_body": "ALTER TABLE settings ADD COLUMN daily_report_body TEXT NOT NULL DEFAULT '昨天累计坐姿 {yesterday_total}，共 {yesterday_sessions} 次，久坐 {yesterday_sedentary} 次，最长连续 {yesterday_longest}。'",
                 "weekly_report_title": "ALTER TABLE settings ADD COLUMN weekly_report_title TEXT NOT NULL DEFAULT '本周久坐报告 · {week_start}–{week_end}'",
                 "weekly_report_body": "ALTER TABLE settings ADD COLUMN weekly_report_body TEXT NOT NULL DEFAULT '本周累计坐姿 {week_total}，日均 {week_daily_average}，共 {week_sessions} 次，久坐 {week_sedentary} 次，最长连续 {week_longest}。'",
+                "repeat_reminder_enabled": "ALTER TABLE settings ADD COLUMN repeat_reminder_enabled INTEGER NOT NULL DEFAULT 1 CHECK (repeat_reminder_enabled IN (0, 1))",
+                "repeat_reminder_minutes": "ALTER TABLE settings ADD COLUMN repeat_reminder_minutes INTEGER NOT NULL DEFAULT 30 CHECK (repeat_reminder_minutes BETWEEN 5 AND 360)",
+                "repeat_reminder_title": "ALTER TABLE settings ADD COLUMN repeat_reminder_title TEXT NOT NULL DEFAULT '久坐提醒 · 第 {repeat_count} 次追加提醒'",
+                "repeat_reminder_body": "ALTER TABLE settings ADD COLUMN repeat_reminder_body TEXT NOT NULL DEFAULT '你已经坐了 {duration}，距上次提醒又过去 {interval}，请尽快起身活动。'",
             }
             for column, statement in migrations.items():
                 if column not in existing_columns:
@@ -154,6 +169,20 @@ class Database:
             session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
             if "away_seconds" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN away_seconds INTEGER NOT NULL DEFAULT 0")
+            if "reminder_count" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN reminder_count INTEGER NOT NULL DEFAULT 0")
+            if "last_reminder_at" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN last_reminder_at TEXT")
+            if "last_reminder_elapsed_seconds" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN last_reminder_elapsed_seconds INTEGER NOT NULL DEFAULT 0")
+            # 早期版本只有首次提醒时间；迁移后保留已提醒状态，避免服务重启时立即重复推送。
+            db.execute(
+                """UPDATE sessions
+                   SET reminder_count = 1,
+                       last_reminder_at = COALESCE(last_reminder_at, reminder_sent_at),
+                       last_reminder_elapsed_seconds = MAX(last_reminder_elapsed_seconds, duration_seconds)
+                   WHERE reminder_sent_at IS NOT NULL AND reminder_count = 0"""
+            )
             values = {**DEFAULT_SETTINGS, "updated_at": datetime.now().astimezone().isoformat()}
             columns = ",".join(["id", *values.keys()])
             placeholders = ",".join(["?"] * (len(values) + 1))
@@ -177,7 +206,7 @@ class Database:
             row = db.execute("SELECT * FROM settings WHERE id = 1").fetchone()
         assert row is not None
         result = dict(row)
-        for key in ("daily_report_enabled", "weekly_report_enabled", "bark_enabled", "webhook_enabled", "camera_offline_alert_enabled", "camera_recovery_alert_enabled"):
+        for key in ("daily_report_enabled", "weekly_report_enabled", "bark_enabled", "webhook_enabled", "camera_offline_alert_enabled", "camera_recovery_alert_enabled", "repeat_reminder_enabled"):
             result[key] = bool(result[key])
         result.pop("id", None)
         result.pop("updated_at", None)
@@ -188,7 +217,7 @@ class Database:
         clean = {key: value for key, value in values.items() if key in allowed}
         if not clean:
             return self.settings()
-        for key in ("daily_report_enabled", "weekly_report_enabled", "bark_enabled", "webhook_enabled", "camera_offline_alert_enabled", "camera_recovery_alert_enabled"):
+        for key in ("daily_report_enabled", "weekly_report_enabled", "bark_enabled", "webhook_enabled", "camera_offline_alert_enabled", "camera_recovery_alert_enabled", "repeat_reminder_enabled"):
             if key in clean:
                 clean[key] = int(bool(clean[key]))
         clean["updated_at"] = datetime.now().astimezone().isoformat()
@@ -239,9 +268,18 @@ class Database:
             db.execute("UPDATE sessions SET away_seconds = away_seconds + ? WHERE id = ?", (seconds, session_id))
         return seconds
 
-    def mark_reminder(self, session_id: int, sent_at: datetime) -> None:
+    def mark_reminder(self, session_id: int, sent_at: datetime, elapsed_seconds: int) -> None:
         with self.connect() as db:
-            db.execute("UPDATE sessions SET reminder_sent_at = ?, is_sedentary = 1 WHERE id = ?", (sent_at.isoformat(), session_id))
+            db.execute(
+                """UPDATE sessions
+                   SET reminder_sent_at = COALESCE(reminder_sent_at, ?),
+                       reminder_count = reminder_count + 1,
+                       last_reminder_at = ?,
+                       last_reminder_elapsed_seconds = ?,
+                       is_sedentary = 1
+                   WHERE id = ?""",
+                (sent_at.isoformat(), sent_at.isoformat(), max(0, elapsed_seconds), session_id),
+            )
 
     def overlapping_sessions(self, start: datetime, end: datetime, now: datetime) -> list[dict[str, Any]]:
         with self.connect() as db:

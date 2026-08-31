@@ -16,6 +16,13 @@ from .stats import format_duration, parse_datetime
 logger = logging.getLogger(__name__)
 
 
+def render_message(template: str, values: dict[str, str]) -> str:
+    result = template
+    for key, value in values.items():
+        result = result.replace(f"{{{key}}}", value)
+    return result
+
+
 class Monitor:
     def __init__(self, db: Database, camera: MjpegReader, detector: HybridPersonDetector | HogPersonDetector | YuNetSeatDetector | YoloPersonDetector, notifier: Notifier):
         self.db, self.camera, self.detector, self.notifier = db, camera, detector, notifier
@@ -23,7 +30,8 @@ class Monitor:
         self.session_id: int | None = int(active["id"]) if active else None
         self.session_started_at: datetime | None = parse_datetime(active["started_at"]) if active else None
         self.away_seconds = int(active.get("away_seconds", 0)) if active else 0
-        self.reminder_attempted = bool(active and active["reminder_sent_at"])
+        self.reminder_count = int(active.get("reminder_count", 0)) if active else 0
+        self.last_reminder_elapsed_seconds = int(active.get("last_reminder_elapsed_seconds", 0)) if active else 0
         self.occupied = bool(active)
         self.present_candidate_since: datetime | None = None
         self.absent_since: datetime | None = None
@@ -70,7 +78,8 @@ class Monitor:
         self.occupied = False
         self.absent_since = None
         self.present_candidate_since = None
-        self.reminder_attempted = False
+        self.reminder_count = 0
+        self.last_reminder_elapsed_seconds = 0
 
     def _end_current_session(self, ended_at: datetime, settings: dict) -> None:
         if self.session_id is None:
@@ -85,19 +94,41 @@ class Monitor:
         elapsed = self.seated_elapsed(now)
         sedentary = elapsed >= int(settings["sedentary_minutes"]) * 60
         self.db.update_active(self.session_id, now, confidence, sedentary)
-        if sedentary and not self.reminder_attempted:
-            self.reminder_attempted = True
-            self.db.mark_reminder(self.session_id, now)
-            if settings["bark_enabled"] or settings["webhook_enabled"]:
-                body = str(settings["reminder_body"]).replace("{duration}", format_duration(elapsed))
-                result = await self.notifier.send(
-                    str(settings["reminder_title"]),
-                    body,
-                    group="久坐提醒",
-                    use_bark=settings["bark_enabled"],
-                    use_webhook=settings["webhook_enabled"],
-                )
-                self.db.log_notification("sedentary", str(self.session_id), now, result.success, result.detail)
+        channels_enabled = bool(settings["bark_enabled"] or settings["webhook_enabled"])
+        first_due = sedentary and self.reminder_count == 0
+        repeat_interval = int(settings["repeat_reminder_minutes"]) * 60
+        repeat_due = (
+            sedentary
+            and self.reminder_count > 0
+            and bool(settings["repeat_reminder_enabled"])
+            and elapsed - self.last_reminder_elapsed_seconds >= repeat_interval
+        )
+        if channels_enabled and (first_due or repeat_due):
+            repeat_count = max(0, self.reminder_count)
+            values = {
+                "duration": format_duration(elapsed),
+                "repeat_count": str(repeat_count),
+                "interval": format_duration(repeat_interval),
+            }
+            title_key = "repeat_reminder_title" if repeat_due else "reminder_title"
+            body_key = "repeat_reminder_body" if repeat_due else "reminder_body"
+            self.reminder_count += 1
+            self.last_reminder_elapsed_seconds = elapsed
+            self.db.mark_reminder(self.session_id, now, elapsed)
+            result = await self.notifier.send(
+                render_message(str(settings[title_key]), values),
+                render_message(str(settings[body_key]), values),
+                group="久坐提醒",
+                use_bark=settings["bark_enabled"],
+                use_webhook=settings["webhook_enabled"],
+            )
+            self.db.log_notification(
+                "sedentary",
+                f"{self.session_id}:{self.reminder_count}",
+                now,
+                result.success,
+                result.detail,
+            )
 
     async def process(self, detection: Detection, now: datetime, settings: dict) -> None:
         self.last_check = now
@@ -139,7 +170,8 @@ class Monitor:
                 self.session_id = self.db.start_session(self.session_started_at)
                 self.away_seconds = 0
                 self.occupied = True
-                self.reminder_attempted = False
+                self.reminder_count = 0
+                self.last_reminder_elapsed_seconds = 0
                 self.present_candidate_since = None
 
             self.absent_since = None
@@ -173,7 +205,15 @@ class Monitor:
         snapshot = self.camera.snapshot()
         effective_now = now if snapshot.online or not self.last_check else self.last_check
         elapsed = self.seated_elapsed(effective_now)
-        remaining = max(0, threshold_minutes * 60 - elapsed) if self.session_id is not None else None
+        settings = self.db.settings()
+        if self.session_id is None:
+            remaining = None
+        elif self.reminder_count > 0 and settings["repeat_reminder_enabled"]:
+            remaining = max(0, int(settings["repeat_reminder_minutes"]) * 60 - (elapsed - self.last_reminder_elapsed_seconds))
+        elif self.reminder_count > 0:
+            remaining = None
+        else:
+            remaining = max(0, threshold_minutes * 60 - elapsed)
         return {
             "occupied": self.occupied,
             "camera_online": snapshot.online,

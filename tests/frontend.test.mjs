@@ -31,6 +31,10 @@ test("dashboard is product-specific and API-connected", async () => {
   assert.match(page, /yesterday_total/);
   assert.match(page, /today_total/);
   assert.match(page, /week_daily_average/);
+  assert.match(page, /重复久坐提醒/);
+  assert.match(page, /repeat_reminder_minutes/);
+  assert.match(page, /repeat_count/);
+  assert.match(page, /\{interval\}/);
   assert.match(css, /placeholder-hint/);
   assert.match(css, /settings-page-grid\{grid-template-columns:1fr/);
   assert.doesNotMatch(page, /modal-backdrop/);

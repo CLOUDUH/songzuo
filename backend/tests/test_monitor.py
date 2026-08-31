@@ -55,6 +55,43 @@ def test_monitor_sends_one_sedentary_reminder(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_monitor_repeats_reminders_at_seated_time_interval_and_restores_state(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        db, notifier, monitor, settings = create_monitor(
+            tmp_path,
+            sedentary_minutes=15,
+            bark_enabled=True,
+            repeat_reminder_enabled=True,
+            repeat_reminder_minutes=30,
+            repeat_reminder_title="追加提醒 {repeat_count}",
+            repeat_reminder_body="已坐 {duration}，间隔 {interval}",
+        )
+        start = datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc)
+        await monitor.process(Detection(True, 0.9), start, settings)
+        await monitor.process(Detection(True, 0.9), start + timedelta(seconds=7), settings)
+        await monitor.process(Detection(True, 0.95), start + timedelta(minutes=16), settings)
+        assert len(notifier.messages) == 1
+
+        # 模拟容器重启，数据库中的提醒次数与计时锚点必须继续生效。
+        restarted = Monitor(db, FakeCamera(), FakeDetector(), notifier)  # type: ignore[arg-type]
+        await restarted.process(Detection(True, 0.95), start + timedelta(minutes=45), settings)
+        assert len(notifier.messages) == 1
+        await restarted.process(Detection(True, 0.95), start + timedelta(minutes=46), settings)
+        await restarted.process(Detection(True, 0.95), start + timedelta(minutes=76), settings)
+
+        assert notifier.messages == [
+            ("该起身活动啦", "你已经连续坐了 16分钟，走动几分钟吧。"),
+            ("追加提醒 1", "已坐 46分钟，间隔 30分钟"),
+            ("追加提醒 2", "已坐 1小时16分，间隔 30分钟"),
+        ]
+        active = db.active_session()
+        assert active is not None
+        assert active["reminder_count"] == 3
+        assert active["last_reminder_elapsed_seconds"] == 76 * 60
+
+    asyncio.run(scenario())
+
+
 def test_short_break_is_merged_but_excluded_from_seated_time(tmp_path: Path) -> None:
     async def scenario() -> None:
         db, _, monitor, settings = create_monitor(tmp_path)
