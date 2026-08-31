@@ -13,9 +13,13 @@ class SettingsUpdate(BaseModel):
     min_face_width_ratio: float = Field(ge=0.05, le=0.40)
     daily_report_enabled: bool
     daily_report_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    daily_report_title: str = Field(min_length=1, max_length=120)
+    daily_report_body: str = Field(min_length=1, max_length=1000)
     weekly_report_enabled: bool
     weekly_report_day: int = Field(ge=1, le=7)
     weekly_report_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    weekly_report_title: str = Field(min_length=1, max_length=120)
+    weekly_report_body: str = Field(min_length=1, max_length=1000)
     bark_enabled: bool
     webhook_enabled: bool
     camera_offline_alert_enabled: bool

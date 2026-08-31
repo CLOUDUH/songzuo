@@ -29,6 +29,7 @@ MJPEG 摄像头 → 字节流读取（只保留内存最新帧） → 低频人�
 - 独立“按日查询”页面，可选择具体日期查看时间轴、逐次时间戳、累计/平均时长、久坐次数、离座时长和当天分析。
 - 摄像头、推送和监测设置合并为一个完整的“系统设置”页面，不依赖侧滑弹层。
 - Bark Server、设备 Key、Webhook、提醒文案和汇总时间均可在 Web 设置；支持即时提醒、每日小结和每周报告。
+- 每日/每周小结的标题与内容均可自定义；每日小结在当天计划时间推送前一个完整自然日的数据，并使用 `today_*`、`yesterday_*` 前缀明确区分今日和昨日占位符。
 - 入口 HTML 禁止缓存、带哈希资源长期缓存，避免 Chrome 在容器更新后保留旧交互代码。
 - 一次性历史修复会先将原会话与离座记录写入 `repair_backups`，再重建用户确认的 2026-08-28 至 2026-08-30 数据，重复启动不会再次执行。
 - 摄像头断线自动重连；断线时不会误判成离座，并支持延迟离线提醒及恢复上线通知。
@@ -118,6 +119,8 @@ SQLite 文件位于 `data/songzuo.db`，WAL 模式并为常用时间查询建了
 Bark 很适合这套 Apple 设备组合：iPhone 收到的系统通知可按 Watch 的通知设置同步到 Apple Watch，也无需为项目申请 APNs 证书。服务使用 Bark V2 JSON `POST /push` 接口，支持官方服务或自建 Bark Server。
 
 如果以后已有 Home Assistant / MQTT，可在 Web 中配置通用 Webhook，再由它分发到多个平台；在当前单人、Apple 设备为主的场景中，Bark 是更精简的选择。
+
+Web 设置会在每个模板下方列出可用占位符。即时久坐提醒支持 `{duration}`；每日小结支持 `{today_date}`、`{today_total}`、`{today_sessions}`、`{today_sedentary}`、`{today_longest}` 及对应的 `yesterday_*` 字段；每周小结支持 `{week_start}`、`{week_end}`、`{week_total}`、`{week_daily_average}`、`{week_sessions}`、`{week_sedentary}`、`{week_longest}`。
 
 ## 本地开发与测试
 

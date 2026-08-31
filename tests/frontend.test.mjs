@@ -28,6 +28,10 @@ test("dashboard is product-specific and API-connected", async () => {
   assert.match(page, /指定日期详情/);
   assert.match(page, /系统设置/);
   assert.match(page, /settings-form-grid/);
+  assert.match(page, /yesterday_total/);
+  assert.match(page, /today_total/);
+  assert.match(page, /week_daily_average/);
+  assert.match(css, /placeholder-hint/);
   assert.match(css, /settings-page-grid\{grid-template-columns:1fr/);
   assert.doesNotMatch(page, /modal-backdrop/);
   assert.match(css, /prefers-reduced-motion/);

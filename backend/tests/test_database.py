@@ -37,6 +37,8 @@ def test_settings_are_persisted_and_secrets_are_not_fields(tmp_path: Path) -> No
     assert settings["camera_offline_minutes"] == 3
     assert settings["face_confidence_threshold"] == 0.60
     assert settings["min_face_width_ratio"] == 0.09
+    assert "{yesterday_date}" in settings["daily_report_title"]
+    assert "{week_total}" in settings["weekly_report_body"]
     assert (settings["roi_x"], settings["roi_y"], settings["roi_w"], settings["roi_h"]) == (0.13, 0.54, 0.37, 0.43)
     assert "camera_password" not in settings
 
