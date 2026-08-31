@@ -33,6 +33,8 @@ test("dashboard is product-specific and API-connected", async () => {
   assert.match(page, /week_daily_average/);
   assert.match(page, /重复久坐提醒/);
   assert.match(page, /repeat_reminder_minutes/);
+  assert.match(page, /type="number" min="5" max="360"/);
+  assert.doesNotMatch(page, /<select value=\{settings\.repeat_reminder_minutes\}/);
   assert.match(page, /repeat_count/);
   assert.match(page, /\{interval\}/);
   assert.match(css, /placeholder-hint/);
