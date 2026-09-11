@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -178,6 +178,11 @@ class Database:
             if "observed_until" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN observed_until TEXT")
                 db.execute("UPDATE sessions SET observed_until = COALESCE(ended_at, started_at)")
+                # Old versions persisted confirmed duration but not its timestamp.
+                # Preserve that duration on upgrade without extending it to startup time.
+                for row in db.execute("SELECT * FROM sessions WHERE ended_at IS NULL").fetchall():
+                    confirmed = datetime.fromisoformat(row['started_at']) + timedelta(seconds=int(row['duration_seconds']) + int(row['away_seconds'] if 'away_seconds' in row.keys() else 0))
+                    db.execute("UPDATE sessions SET observed_until = ? WHERE id = ?", (confirmed.isoformat(), row['id']))
             if "away_seconds" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN away_seconds INTEGER NOT NULL DEFAULT 0")
             if "reminder_count" not in session_columns:
