@@ -119,6 +119,7 @@ def overview(request: Request, period: str = Query("week", pattern="^(day|week|m
     return {
         "status": status,
         "today": today,
+        "interruptions": db.interruptions(day_start, day_end, now),
         "comparison": same_time_comparison(db, now, tz),
         "threshold_minutes": settings["sedentary_minutes"],
         "sessions": recent,

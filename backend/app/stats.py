@@ -20,7 +20,7 @@ def summarize(db: Database, start: datetime, end: datetime, now: datetime) -> di
     breaks = db.breaks_for_sessions([int(row["id"]) for row in sessions])
     for row in sessions:
         row_start = max(start, parse_datetime(row["started_at"]))
-        row_end = min(end, parse_datetime(row["ended_at"]) if row["ended_at"] else now)
+        row_end = min(end, now, parse_datetime(row["ended_at"] or row["observed_until"] or row["started_at"]))
         seconds = max(0, int((row_end - row_start).total_seconds()))
         for item in breaks.get(int(row["id"]), []):
             break_start = max(row_start, parse_datetime(item["started_at"]))
@@ -167,7 +167,7 @@ def day_detail(db: Database, target_date: date, now: datetime, tz: ZoneInfo) -> 
         row["breaks"] = break_map.get(int(row["id"]), [])
         total_break_seconds += sum(int(item["duration_seconds"]) for item in row["breaks"])
     first_started_at = sessions[0]["started_at"] if sessions else None
-    last_ended_at = (sessions[-1]["ended_at"] or now.isoformat()) if sessions else None
+    last_ended_at = (sessions[-1]["ended_at"] or sessions[-1]["observed_until"] or sessions[-1]["started_at"]) if sessions else None
     span_seconds = 0
     if first_started_at and last_ended_at:
         span_seconds = max(0, int((min(parse_datetime(last_ended_at), end) - max(parse_datetime(first_started_at), start)).total_seconds()))
@@ -176,6 +176,7 @@ def day_detail(db: Database, target_date: date, now: datetime, tz: ZoneInfo) -> 
         "date": target_date.isoformat(),
         "summary": summary,
         "sessions": sessions,
+        "interruptions": db.interruptions(start, end, now),
         "analysis": {
             "first_started_at": first_started_at,
             "last_ended_at": last_ended_at,

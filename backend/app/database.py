@@ -132,6 +132,14 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS monitoring_interruptions (
+                    id INTEGER PRIMARY KEY,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    reason TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS one_open_interruption
+                    ON monitoring_interruptions((1)) WHERE ended_at IS NULL;
                 CREATE TABLE IF NOT EXISTS repair_backups (
                     id INTEGER PRIMARY KEY,
                     repair_key TEXT NOT NULL UNIQUE,
@@ -167,6 +175,9 @@ class Database:
                 if column not in existing_columns:
                     db.execute(statement)
             session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
+            if "observed_until" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN observed_until TEXT")
+                db.execute("UPDATE sessions SET observed_until = COALESCE(ended_at, started_at)")
             if "away_seconds" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN away_seconds INTEGER NOT NULL DEFAULT 0")
             if "reminder_count" not in session_columns:
@@ -236,16 +247,16 @@ class Database:
         if active:
             return int(active["id"])
         with self.connect() as db:
-            cursor = db.execute("INSERT INTO sessions(started_at) VALUES (?)", (started_at.isoformat(),))
+            cursor = db.execute("INSERT INTO sessions(started_at, observed_until) VALUES (?, ?)", (started_at.isoformat(), started_at.isoformat()))
             return int(cursor.lastrowid)
 
     def update_active(self, session_id: int, now: datetime, confidence: float, sedentary: bool) -> None:
         with self.connect() as db:
             db.execute(
                 """UPDATE sessions SET duration_seconds = MAX(0, CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER) - away_seconds),
-                   is_sedentary = MAX(is_sedentary, ?), average_confidence = ((average_confidence * samples) + ?) / (samples + 1), samples = samples + 1
+                   is_sedentary = MAX(is_sedentary, ?), average_confidence = ((average_confidence * samples) + ?) / (samples + 1), samples = samples + 1, observed_until = ?
                    WHERE id = ? AND ended_at IS NULL""",
-                (now.isoformat(), int(sedentary), confidence, session_id),
+                (now.isoformat(), int(sedentary), confidence, now.isoformat(), session_id),
             )
 
     def end_session(self, session_id: int, ended_at: datetime, sedentary: bool) -> None:
@@ -284,8 +295,8 @@ class Database:
     def overlapping_sessions(self, start: datetime, end: datetime, now: datetime) -> list[dict[str, Any]]:
         with self.connect() as db:
             rows = db.execute(
-                """SELECT * FROM sessions WHERE started_at < ? AND COALESCE(ended_at, ?) > ? ORDER BY started_at""",
-                (end.isoformat(), now.isoformat(), start.isoformat()),
+                """SELECT * FROM sessions WHERE started_at < ? AND COALESCE(ended_at, observed_until, started_at) > ? ORDER BY started_at""",
+                (end.isoformat(), start.isoformat()),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -364,6 +375,35 @@ class Database:
     def notification_exists(self, kind: str, period_key: str) -> bool:
         with self.connect() as db:
             return db.execute("SELECT 1 FROM notification_log WHERE kind = ? AND period_key = ?", (kind, period_key)).fetchone() is not None
+
+    def last_observation(self) -> datetime | None:
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM app_meta WHERE key = 'last_observation'").fetchone()
+        return datetime.fromisoformat(row[0]) if row else None
+
+    def record_observation(self, at: datetime) -> None:
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES ('last_observation', ?)", (at.isoformat(),))
+
+    def begin_interruption(self, at: datetime, reason: str) -> None:
+        with self.connect() as db:
+            db.execute("INSERT OR IGNORE INTO monitoring_interruptions(started_at, reason) VALUES (?, ?)", (at.isoformat(), reason))
+
+    def end_interruption(self, at: datetime) -> None:
+        with self.connect() as db:
+            db.execute("UPDATE monitoring_interruptions SET ended_at = MAX(started_at, ?) WHERE ended_at IS NULL", (at.isoformat(),))
+
+    def interruptions(self, start: datetime, end: datetime, now: datetime) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM monitoring_interruptions WHERE started_at < ? AND COALESCE(ended_at, ?) > ? ORDER BY started_at", (end.isoformat(), now.isoformat(), start.isoformat())).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            left = max(start, datetime.fromisoformat(item['started_at']))
+            right = min(end, now, datetime.fromisoformat(item['ended_at']) if item['ended_at'] else now)
+            item['duration_seconds'] = max(0, int((right - left).total_seconds()))
+            result.append(item)
+        return result
 
     def log_notification(self, kind: str, period_key: str, sent_at: datetime, success: bool, detail: str = "") -> None:
         with self.connect() as db:

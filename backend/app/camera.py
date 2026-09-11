@@ -59,7 +59,8 @@ class MjpegReader:
 
     def snapshot(self) -> CameraSnapshot:
         with self._lock:
-            return CameraSnapshot(self._jpeg, self._captured_at, self._online, self._error)
+            stale = self._captured_at is not None and (datetime.now(timezone.utc) - self._captured_at).total_seconds() > 30
+            return CameraSnapshot(self._jpeg, self._captured_at, self._online and not stale, '超过 30 秒未收到新画面' if stale else self._error)
 
     def _set_status(self, online: bool, error: str = "") -> None:
         with self._lock:
@@ -112,6 +113,8 @@ class MjpegReader:
                                     self._error = ""
                         if not found_frame:
                             self._set_status(False, "已连接但未收到 MJPEG 画面，请检查流地址")
+                        else:
+                            self._set_status(False, "视频流已断开，正在重连")
             except httpx.HTTPStatusError as exc:
                 code = exc.response.status_code
                 message = "摄像头需要登录" if code in (401, 403) else f"摄像头返回 HTTP {code}"

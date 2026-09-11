@@ -40,21 +40,54 @@ class Monitor:
         self.last_boxes: tuple[tuple[int, int, int, int], ...] = ()
         self._last_frame_at: datetime | None = None
         self._stop = asyncio.Event()
+        self.monitoring_available = False
+        self.last_check = db.last_observation()
+        if active:
+            cutoff = parse_datetime(active['observed_until'] or active['started_at'])
+            self._end_current_session(cutoff, db.settings())
+            db.begin_interruption(cutoff, 'service_restart')
+        elif self.last_check:
+            db.begin_interruption(self.last_check, 'service_restart')
+
+    def interrupt(self, now: datetime, reason: str, settings: dict) -> None:
+        cutoff = self.last_check or now
+        if self.absent_since:
+            cutoff = min(cutoff, self.absent_since)
+        self._end_current_session(cutoff, settings)
+        self.present_candidate_since = None
+        self.monitoring_available = False
+        self.db.begin_interruption(self.last_check or now, reason)
+
+    async def poll(self, snapshot, now: datetime, settings: dict) -> None:
+        timeout = max(30, int(settings['sample_interval_seconds']) * 3)
+        if not snapshot.online or not snapshot.captured_at or not snapshot.jpeg:
+            self.interrupt(now, 'camera_offline', settings)
+            return
+        if (now - snapshot.captured_at).total_seconds() > timeout:
+            self.interrupt(now, 'frame_timeout', settings)
+            return
+        if snapshot.captured_at == self._last_frame_at:
+            return
+        self._last_frame_at = snapshot.captured_at
+        try:
+            frame = cv2.imdecode(np.frombuffer(snapshot.jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                self.interrupt(now, 'invalid_frame', settings)
+                return
+            roi = {key: float(settings[key]) for key in ('roi_x', 'roi_y', 'roi_w', 'roi_h', 'face_confidence_threshold', 'min_face_width_ratio')}
+            detection = await asyncio.to_thread(self.detector.detect, frame, roi)
+            if self._stop.is_set():
+                return
+            await self.process(detection, snapshot.captured_at, settings)
+        except Exception:
+            logger.exception('Person detection failed')
+            self.interrupt(now, 'detection_error', settings)
 
     async def run(self) -> None:
         while not self._stop.is_set():
             settings = self.db.settings()
             snapshot = self.camera.snapshot()
-            if snapshot.jpeg and snapshot.captured_at != self._last_frame_at:
-                self._last_frame_at = snapshot.captured_at
-                frame = cv2.imdecode(np.frombuffer(snapshot.jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    roi = {key: float(settings[key]) for key in ("roi_x", "roi_y", "roi_w", "roi_h", "face_confidence_threshold", "min_face_width_ratio")}
-                    try:
-                        detection = await asyncio.to_thread(self.detector.detect, frame, roi)
-                        await self.process(detection, datetime.now(timezone.utc), settings)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("Person detection failed")
+            await self.poll(snapshot, datetime.now(timezone.utc), settings)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=max(1, int(settings["sample_interval_seconds"])))
             except TimeoutError:
@@ -62,6 +95,7 @@ class Monitor:
 
     async def stop(self) -> None:
         self._stop.set()
+        self.interrupt(datetime.now(timezone.utc), 'service_restart', self.db.settings())
 
     def seated_elapsed(self, at: datetime) -> int:
         if not self.session_started_at:
@@ -131,6 +165,11 @@ class Monitor:
             )
 
     async def process(self, detection: Detection, now: datetime, settings: dict) -> None:
+        if self.last_check and (now - self.last_check).total_seconds() > max(30, int(settings['sample_interval_seconds']) * 3):
+            self.interrupt(now, 'frame_timeout', settings)
+        self.db.end_interruption(now)
+        self.db.record_observation(now)
+        self.monitoring_available = True
         self.last_check = now
         self.confidence = detection.confidence
         self.last_boxes = detection.boxes
@@ -203,7 +242,7 @@ class Monitor:
     def status(self, threshold_minutes: int) -> dict:
         now = datetime.now(timezone.utc)
         snapshot = self.camera.snapshot()
-        effective_now = now if snapshot.online or not self.last_check else self.last_check
+        effective_now = self.last_check or now
         elapsed = self.seated_elapsed(effective_now)
         settings = self.db.settings()
         if self.session_id is None:
@@ -215,6 +254,7 @@ class Monitor:
         else:
             remaining = max(0, threshold_minutes * 60 - elapsed)
         return {
+            "monitoring_available": self.monitoring_available and snapshot.online and self.last_check is not None and (now - self.last_check).total_seconds() <= max(30, int(settings['sample_interval_seconds']) * 3),
             "occupied": self.occupied,
             "camera_online": snapshot.online,
             "camera_error": snapshot.error,
